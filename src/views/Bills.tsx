@@ -7,6 +7,7 @@ import {
 import type { Bill, BillCategory, Recurrence } from '../lib/types'
 import { catMeta } from '../lib/meta'
 import { Sheet, Field, Seg } from '../components/ui'
+import BillCalendar from '../components/BillCalendar'
 import { addDays } from 'date-fns'
 
 const cats = Object.keys(catMeta) as BillCategory[]
@@ -28,6 +29,7 @@ export default function Bills() {
   const [editing, setEditing] = useState<Bill | null>(null)
   const [form, setForm] = useState(blank())
   const [horizon, setHorizon] = useState(30)
+  const [mode, setMode] = useState<'list' | 'calendar'>('list')
 
   const up = useMemo(() => upcomingBills(s.bills, 365), [s.bills])
   const buffer = fundingNeeded(s.bills, horizon)
@@ -66,8 +68,12 @@ export default function Bills() {
         </div>
       </div>
 
+      <Seg value={mode} onChange={setMode} options={[{ value: 'list', label: 'List' }, { value: 'calendar', label: 'Calendar' }]} />
+
+      {mode === 'calendar' && <BillCalendar bills={s.bills} onPick={openEdit} />}
+
       {/* Bills list */}
-      <div className="card">
+      {mode === 'list' && <div className="card">
         <div className="card-title" style={{ marginBottom: 4 }}>All bills · {s.bills.length}</div>
         {up.length === 0 && <div className="tiny muted" style={{ padding: '12px 0' }}>No bills yet. Tap + to add your first.</div>}
         {up.map(u => {
@@ -93,7 +99,7 @@ export default function Bills() {
             </div>
           )
         })}
-      </div>
+      </div>}
 
       {/* Add/Edit sheet */}
       <Sheet open={open} onClose={() => setOpen(false)} title={editing ? 'Edit Bill' : 'Add Bill'}>

@@ -7,10 +7,11 @@ import {
 } from '../lib/finance'
 import type { Goal } from '../lib/types'
 import { Sheet, Field, Seg, Bar, Ring } from '../components/ui'
+import { ChevronLeft } from 'lucide-react'
 
 const goalColors = ['#34d399', '#60a5fa', '#f472b6', '#fbbf24', '#a78bfa', '#22d3ee']
 
-export default function Plan() {
+export default function Plan({ back }: { back?: () => void }) {
   const s = useStore()
   const cf = monthlyCashflow(s)
   const [open, setOpen] = useState(false)
@@ -34,7 +35,11 @@ export default function Plan() {
 
   return (
     <div className="view stack" style={{ gap: 14 }}>
-      <div className="header"><div><div className="sub">Budget · goals · debt</div><h1>Plan</h1></div>
+      <div className="header">
+        <div className="row" style={{ gap: 10 }}>
+          {back && <button className="btn icon ghost" onClick={back}><ChevronLeft size={20} /></button>}
+          <div><div className="sub">Budget · goals · debt</div><h1>Plan</h1></div>
+        </div>
         <button className="btn icon primary" onClick={openAdd}><Plus size={20} /></button></div>
 
       {/* Cashflow */}

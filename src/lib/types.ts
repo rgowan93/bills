@@ -87,7 +87,11 @@ export interface Settings {
   buffferAccountName: string
   notificationsEnabled: boolean
   onboarded: boolean
+  pin?: string
+  lockEnabled: boolean
 }
+
+export interface NetWorthPoint { date: string; value: number }
 
 export interface AppState {
   bills: Bill[]
@@ -97,5 +101,6 @@ export interface AppState {
   creditAccounts: CreditAccount[]
   creditHistory: CreditSnapshot[]
   transactions: Transaction[]
+  netWorthHistory: NetWorthPoint[]
   settings: Settings
 }

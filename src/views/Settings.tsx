@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { Bell, Download, Upload, Trash2, Sparkles, ChevronLeft, Shield, DollarSign } from 'lucide-react'
+import { Bell, Download, Upload, Trash2, Sparkles, ChevronLeft, Shield, DollarSign, Lock } from 'lucide-react'
 import { useStore } from '../store/store'
 import { money } from '../lib/finance'
 import { requestPermission } from '../lib/notify'
@@ -9,6 +9,8 @@ export default function Settings({ back }: { back: () => void }) {
   const s = useStore()
   const fileRef = useRef<HTMLInputElement>(null)
   const [msg, setMsg] = useState('')
+  const [pinMode, setPinMode] = useState(false)
+  const [pinEntry, setPinEntry] = useState('')
 
   const flash = (m: string) => { setMsg(m); setTimeout(() => setMsg(''), 2500) }
 
@@ -64,6 +66,29 @@ export default function Settings({ back }: { back: () => void }) {
           <Seg value={s.settings.riskTolerance} onChange={v => s.updateSettings({ riskTolerance: v })}
             options={[{ value: 'conservative', label: 'Safe' }, { value: 'balanced', label: 'Balanced' }, { value: 'aggressive', label: 'Growth' }, { value: 'degen', label: 'High Risk' }]} />
         </Field>
+      </div>
+
+      {/* Privacy lock */}
+      <div className="card">
+        <div className="between">
+          <div className="row" style={{ gap: 10 }}><Lock size={18} className="muted" />
+            <div><div className="b small">Passcode lock</div><div className="tiny faint">Require a 4-digit code to open</div></div></div>
+          <button className={`btn sm ${s.settings.lockEnabled ? 'accent' : 'primary'}`}
+            onClick={() => {
+              if (s.settings.lockEnabled) { s.updateSettings({ lockEnabled: false, pin: undefined }); flash('Lock removed') }
+              else { setPinMode(true) }
+            }}>{s.settings.lockEnabled ? 'On ✓' : 'Set up'}</button>
+        </div>
+        {pinMode && !s.settings.lockEnabled && (
+          <div className="stack" style={{ marginTop: 14 }}>
+            <Field label="Choose a 4-digit passcode">
+              <input type="tel" inputMode="numeric" maxLength={4} value={pinEntry} placeholder="••••"
+                onChange={e => setPinEntry(e.target.value.replace(/\D/g, '').slice(0, 4))} style={{ letterSpacing: '0.5em', textAlign: 'center', fontSize: 22 }} />
+            </Field>
+            <button className="btn primary full" disabled={pinEntry.length !== 4}
+              onClick={() => { s.updateSettings({ pin: pinEntry, lockEnabled: true }); setPinMode(false); setPinEntry(''); flash('Passcode set ✓') }}>Save passcode</button>
+          </div>
+        )}
       </div>
 
       {/* Notifications */}

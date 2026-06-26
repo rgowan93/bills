@@ -7,9 +7,11 @@ import {
   money, compactMoney, pct, projectWealth, expectedReturn, netWorth, monthlyCashflow
 } from '../lib/finance'
 import { allocationModel, DISCLAIMER } from '../lib/insights'
+import { buildBuyPlan, suggestedMonthlyInvest, macroMeta } from '../lib/advisor'
 import type { Holding } from '../lib/types'
 import { assetMeta } from '../lib/meta'
-import { Sheet, Field, Seg } from '../components/ui'
+import { Sheet, Field, Seg, Bar } from '../components/ui'
+import { Sparkles, ArrowRight } from 'lucide-react'
 
 const classes = Object.keys(assetMeta)
 
@@ -18,6 +20,11 @@ export default function Invest() {
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<Holding | null>(null)
   const [form, setForm] = useState<Omit<Holding, 'id'>>({ symbol: '', name: '', assetClass: 'etf', units: 0, costBasis: 0, currentPrice: 0 })
+
+  const suggested = Math.round(suggestedMonthlyInvest(s))
+  const [investAmt, setInvestAmt] = useState<number>(suggested || 1000)
+  const plan = useMemo(() => buildBuyPlan(s, investAmt), [s, investAmt])
+  const stepTone: Record<string, string> = { good: 'var(--good)', warn: 'var(--warn)', info: 'var(--info)', bad: 'var(--bad)' }
 
   const pv = portfolioValue(s.holdings)
   const pc = portfolioCost(s.holdings)
@@ -61,6 +68,76 @@ export default function Invest() {
           <span className="chip">cost {compactMoney(pc)}</span>
         </div>
       </div>
+
+      {/* Smart advisor — what to buy now */}
+      <div className="card" style={{ borderColor: 'rgba(124,92,255,0.3)', background: 'radial-gradient(120% 140% at 0% 0%, rgba(124,92,255,0.18), transparent 60%), var(--surface)' }}>
+        <div className="between">
+          <div className="card-title"><Sparkles size={13} style={{ verticalAlign: -2 }} /> What to buy now</div>
+          <span className="chip info">{s.settings.riskTolerance}</span>
+        </div>
+        <div className="tiny muted" style={{ margin: '8px 0 12px' }}>A personalized plan for the money you have, in priority order.</div>
+
+        <div className="field">
+          <label>Money you have to put to work</label>
+          <input type="number" inputMode="decimal" value={investAmt || ''} onChange={e => setInvestAmt(Number(e.target.value))} />
+        </div>
+        <div className="scroll-x" style={{ marginTop: 10 }}>
+          {suggested > 0 && <button className="chip" style={{ flexShrink: 0 }} onClick={() => setInvestAmt(suggested)}>Monthly free: {money(suggested)}</button>}
+          {[500, 1000, 5000, 10000, 25000].map(v => <button key={v} className="chip" style={{ flexShrink: 0 }} onClick={() => setInvestAmt(v)}>{money(v)}</button>)}
+        </div>
+
+        <div className="stack" style={{ gap: 10, marginTop: 16 }}>
+          {plan.steps.map((st, i) => (
+            <div key={st.id} className="card" style={{ padding: 14, background: 'rgba(255,255,255,0.03)' }}>
+              <div className="row" style={{ gap: 11, alignItems: 'flex-start' }}>
+                <div className="lico" style={{ width: 34, height: 34, background: stepTone[st.tone] + '22', color: stepTone[st.tone], fontWeight: 800, fontSize: 14, flexShrink: 0 }}>{i + 1}</div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="between" style={{ gap: 8 }}>
+                    <span className="b" style={{ fontSize: 14.5 }}>{st.title}</span>
+                    {st.amount !== undefined && <span className="b mono" style={{ color: stepTone[st.tone], whiteSpace: 'nowrap' }}>{money(st.amount)}</span>}
+                  </div>
+                  <div className="meta" style={{ marginTop: 4 }}>{st.detail}</div>
+                  {st.instruments && (
+                    <div className="stack" style={{ gap: 4, marginTop: 8 }}>
+                      {st.instruments.map(ins => (
+                        <div key={ins} className="tiny" style={{ color: 'var(--text)', display: 'flex', gap: 6, alignItems: 'baseline' }}>
+                          <ArrowRight size={11} style={{ color: stepTone[st.tone], flexShrink: 0 }} /> {ins}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
+          {plan.steps.length === 0 && <div className="tiny muted">Enter an amount above to get your plan.</div>}
+        </div>
+        <p className="disclaimer" style={{ marginTop: 12 }}>Example funds are well-known, broadly diversified instruments shown for education — not a recommendation to buy any specific security. Do your own research.</p>
+      </div>
+
+      {/* Drift / rebalance */}
+      {pv > 0 && (
+        <div className="card">
+          <div className="card-title">Portfolio vs target (rebalance)</div>
+          <div className="stack" style={{ gap: 12, marginTop: 12 }}>
+            {plan.drift.map(d => {
+              const off = Math.abs(d.delta) >= 0.05
+              return (
+                <div key={d.macro}>
+                  <div className="between" style={{ marginBottom: 5 }}>
+                    <span className="small b row" style={{ gap: 7 }}><span style={{ width: 9, height: 9, borderRadius: 9, background: macroMeta[d.macro].color }} />{macroMeta[d.macro].label}</span>
+                    <span className="tiny mono">{(d.currentPct * 100).toFixed(0)}% <span className="faint">/ {(d.targetPct * 100).toFixed(0)}% target</span></span>
+                  </div>
+                  <Bar value={d.currentPct} color={macroMeta[d.macro].color} />
+                  {off && <div className="tiny" style={{ marginTop: 4, color: d.delta > 0 ? 'var(--warn)' : 'var(--info)' }}>
+                    {d.delta > 0 ? `Overweight by ${(d.delta * 100).toFixed(0)}% — consider trimming or letting new money flow elsewhere.` : `Underweight by ${(-d.delta * 100).toFixed(0)}% — direct new contributions here.`}
+                  </div>}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Allocation */}
       {alloc.length > 0 && (

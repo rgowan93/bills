@@ -1,9 +1,9 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type {
-  AppState, Bill, Income, Goal, Holding, CreditAccount, CreditSnapshot, Settings, Transaction
+  AppState, Bill, Income, Goal, Holding, CreditAccount, CreditSnapshot, Settings, Transaction, NetWorthPoint
 } from '../lib/types'
-import { uid, advance, normalizeBill } from '../lib/finance'
+import { uid, advance, normalizeBill, netWorth } from '../lib/finance'
 import { addDays, parseISO, startOfDay, isAfter } from 'date-fns'
 
 interface Store extends AppState {
@@ -29,9 +29,13 @@ interface Store extends AppState {
   updateCreditAccount: (id: string, patch: Partial<CreditAccount>) => void
   removeCreditAccount: (id: string) => void
   addCreditSnapshot: (s: CreditSnapshot) => void
+  // transactions
+  addTransaction: (t: Omit<Transaction, 'id'>) => void
+  removeTransaction: (id: string) => void
   // settings
   updateSettings: (patch: Partial<Settings>) => void
   // data
+  snapshotNetWorth: () => void
   normalizeAll: () => void
   exportData: () => string
   importData: (json: string) => boolean
@@ -49,7 +53,8 @@ const defaultSettings: Settings = {
   riskTolerance: 'aggressive',
   buffferAccountName: 'Bills Account',
   notificationsEnabled: false,
-  onboarded: false
+  onboarded: false,
+  lockEnabled: false
 }
 
 const iso = (d: Date) => startOfDay(d).toISOString()
@@ -94,13 +99,24 @@ function demoState(): AppState {
       { date: iso(addDays(today, -60)), score: 741 },
       { date: iso(addDays(today, -30)), score: 758 }
     ],
-    transactions: []
+    transactions: [
+      { id: uid(), date: d(-1), description: 'Groceries', amount: -184, category: 'food' },
+      { id: uid(), date: d(-2), description: 'Gas', amount: -62, category: 'transport' },
+      { id: uid(), date: d(-3), description: 'Dinner out', amount: -88, category: 'food' },
+      { id: uid(), date: d(-4), description: 'Paycheck', amount: 7500, category: 'income' },
+      { id: uid(), date: d(-6), description: 'Amazon', amount: -130, category: 'shopping' }
+    ],
+    netWorthHistory: [
+      { date: d(-150), value: 38000 }, { date: d(-120), value: 44000 },
+      { date: d(-90), value: 51000 }, { date: d(-60), value: 58500 },
+      { date: d(-30), value: 65000 }, { date: d(0), value: 71990 }
+    ]
   }
 }
 
 const empty: AppState = {
   bills: [], income: [], goals: [], holdings: [], creditAccounts: [], creditHistory: [], transactions: [],
-  settings: defaultSettings
+  netWorthHistory: [], settings: defaultSettings
 }
 
 export const useStore = create<Store>()(
@@ -140,12 +156,21 @@ export const useStore = create<Store>()(
       removeCreditAccount: (id) => set(s => ({ creditAccounts: s.creditAccounts.filter(c => c.id !== id) })),
       addCreditSnapshot: (snap) => set(s => ({ creditHistory: [...s.creditHistory, snap].sort((a, b) => a.date.localeCompare(b.date)) })),
 
+      addTransaction: (t) => set(s => ({ transactions: [{ ...t, id: uid() }, ...s.transactions] })),
+      removeTransaction: (id) => set(s => ({ transactions: s.transactions.filter(t => t.id !== id) })),
+
       updateSettings: (patch) => set(s => ({ settings: { ...s.settings, ...patch } })),
 
+      snapshotNetWorth: () => set(s => {
+        const today = new Date().toISOString().slice(0, 10)
+        const val = netWorth(s)
+        const hist = s.netWorthHistory.filter(p => p.date.slice(0, 10) !== today)
+        return { netWorthHistory: [...hist, { date: new Date().toISOString(), value: val }].slice(-365) }
+      }),
       normalizeAll: () => set(s => ({ bills: s.bills.map(normalizeBill) })),
       exportData: () => {
-        const { bills, income, goals, holdings, creditAccounts, creditHistory, transactions, settings } = get()
-        return JSON.stringify({ bills, income, goals, holdings, creditAccounts, creditHistory, transactions, settings }, null, 2)
+        const { bills, income, goals, holdings, creditAccounts, creditHistory, transactions, netWorthHistory, settings } = get()
+        return JSON.stringify({ bills, income, goals, holdings, creditAccounts, creditHistory, transactions, netWorthHistory, settings }, null, 2)
       },
       importData: (json) => {
         try {
@@ -154,6 +179,7 @@ export const useStore = create<Store>()(
             bills: d.bills ?? [], income: d.income ?? [], goals: d.goals ?? [],
             holdings: d.holdings ?? [], creditAccounts: d.creditAccounts ?? [],
             creditHistory: d.creditHistory ?? [], transactions: d.transactions ?? [],
+            netWorthHistory: d.netWorthHistory ?? [],
             settings: { ...defaultSettings, ...(d.settings ?? {}) }
           })
           return true
@@ -162,6 +188,6 @@ export const useStore = create<Store>()(
       resetAll: () => set({ ...empty }),
       loadDemo: () => set({ ...demoState() })
     }),
-    { name: 'wealthos-v1' }
+    { name: 'wealthos-v1', version: 2 }
   )
 )

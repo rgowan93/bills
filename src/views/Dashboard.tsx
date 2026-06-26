@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { motion } from 'framer-motion'
-import { ArrowUpRight, Bell, Sparkles, TrendingUp, Wallet, CalendarClock, ChevronRight } from 'lucide-react'
+import { ArrowUpRight, Bell, Sparkles, TrendingUp, Wallet, CalendarClock, ChevronRight, Target, PiggyBank } from 'lucide-react'
 import { AreaChart, Area, ResponsiveContainer, Tooltip } from 'recharts'
 import { useStore } from '../store/store'
 import {
@@ -23,6 +23,8 @@ export default function Dashboard({ go }: { go: (tab: string) => void }) {
   const perWeek = setAsidePerPaycheck(monthlyBills, 'weekly')
   const insights = useMemo(() => buildInsights(s), [s])
   const ps = paymentScore(s.bills)
+  const nwHist = s.netWorthHistory.map((p, i) => ({ i, v: Math.round(p.value) }))
+  const nwDelta = nwHist.length >= 2 ? nwHist[nwHist.length - 1].v - nwHist[0].v : 0
 
   const proj = useMemo(() => projectWealth({
     start: Math.max(0, nw), monthlyContribution: Math.max(0, cf.free),
@@ -92,6 +94,33 @@ export default function Dashboard({ go }: { go: (tab: string) => void }) {
           <span className="b">{money(perWeek)}</span>
         </div>
       </div>
+
+      {/* Quick actions */}
+      <div className="grid grid-2">
+        <button className="card tap row" style={{ gap: 12 }} onClick={() => go('plan')}>
+          <div className="lico" style={{ background: 'rgba(124,92,255,0.18)' }}><Target size={18} style={{ color: 'var(--accent)' }} /></div>
+          <div style={{ textAlign: 'left' }}><div className="b small">Plan</div><div className="tiny faint">goals · debt</div></div>
+        </button>
+        <button className="card tap row" style={{ gap: 12 }} onClick={() => go('spend')}>
+          <div className="lico" style={{ background: 'rgba(0,224,198,0.16)' }}><PiggyBank size={18} style={{ color: 'var(--accent-2)' }} /></div>
+          <div style={{ textAlign: 'left' }}><div className="b small">Spending</div><div className="tiny faint">track money</div></div>
+        </button>
+      </div>
+
+      {/* Net worth trend (real history) */}
+      {nwHist.length >= 2 && (
+        <div className="card">
+          <div className="between"><div className="card-title"><TrendingUp size={13} style={{ verticalAlign: -2 }} /> Net worth trend</div>
+            <span className={`delta ${nwDelta >= 0 ? 'up' : 'down'}`}>{nwDelta >= 0 ? '+' : '−'}{compactMoney(Math.abs(nwDelta))}</span></div>
+          <div style={{ height: 70, margin: '10px -8px -6px' }}>
+            <ResponsiveContainer><AreaChart data={nwHist}>
+              <defs><linearGradient id="g2" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#00e0c6" stopOpacity={0.4} /><stop offset="100%" stopColor="#00e0c6" stopOpacity={0} /></linearGradient></defs>
+              <Tooltip cursor={false} contentStyle={{ background: '#12121f', border: '1px solid var(--border)', borderRadius: 12, fontSize: 12 }} formatter={(v: any) => [money(v), 'Net worth']} labelFormatter={() => ''} />
+              <Area dataKey="v" stroke="#00e0c6" strokeWidth={2} fill="url(#g2)" />
+            </AreaChart></ResponsiveContainer>
+          </div>
+        </div>
+      )}
 
       {/* Coach insights */}
       {insights.length > 0 && (
