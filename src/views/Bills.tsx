@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react'
-import { Plus, Check, Trash2, Bell, BellOff, Repeat, CalendarClock, Zap } from 'lucide-react'
+import { useMemo, useRef, useState } from 'react'
+import { Plus, Check, Trash2, Bell, BellOff, Repeat, CalendarClock, Zap, ScanLine, Sparkles, Loader2 } from 'lucide-react'
 import { useStore } from '../store/store'
 import {
   upcomingBills, money, fmtDate, fundingNeeded, monthlyBillTotal, setAsidePerPaycheck, monthlyEquivalent
@@ -8,6 +8,7 @@ import type { Bill, BillCategory, Recurrence } from '../lib/types'
 import { catMeta } from '../lib/meta'
 import { Sheet, Field, Seg } from '../components/ui'
 import BillCalendar from '../components/BillCalendar'
+import { scanBill, type ParsedBill } from '../lib/billscan'
 import { addDays } from 'date-fns'
 
 const cats = Object.keys(catMeta) as BillCategory[]
@@ -30,13 +31,42 @@ export default function Bills() {
   const [form, setForm] = useState(blank())
   const [horizon, setHorizon] = useState(30)
   const [mode, setMode] = useState<'list' | 'calendar'>('list')
+  const fileRef = useRef<HTMLInputElement>(null)
+  const [scanning, setScanning] = useState(false)
+  const [scanPct, setScanPct] = useState(0)
+  const [scanErr, setScanErr] = useState('')
+  const [scanned, setScanned] = useState<ParsedBill | null>(null)
 
   const up = useMemo(() => upcomingBills(s.bills, 365), [s.bills])
   const buffer = fundingNeeded(s.bills, horizon)
   const monthlyBills = monthlyBillTotal(s.bills)
 
-  const openAdd = () => { setEditing(null); setForm(blank()); setOpen(true) }
-  const openEdit = (b: Bill) => { setEditing(b); setForm({ ...b }); setOpen(true) }
+  const openAdd = () => { setEditing(null); setForm(blank()); setScanned(null); setOpen(true) }
+  const openEdit = (b: Bill) => { setEditing(b); setForm({ ...b }); setScanned(null); setOpen(true) }
+
+  const onPickFiles = async (files: FileList | null) => {
+    if (!files || !files.length) return
+    setScanErr(''); setScanPct(0); setScanning(true)
+    try {
+      const result = await scanBill(Array.from(files), p => setScanPct(p))
+      const b = blank()
+      const merged = {
+        ...b,
+        name: result.name || b.name,
+        amount: result.amount ?? b.amount,
+        category: result.category || b.category,
+        recurrence: result.recurrence || b.recurrence,
+        nextDue: result.nextDue || b.nextDue,
+        account: result.account,
+      }
+      setEditing(null); setForm(merged); setScanned(result); setOpen(true)
+    } catch (e: any) {
+      setScanErr(e?.message?.includes('etwork') ? 'Could not load the scanner. Connect to the internet once so it can download (then it works offline).' : 'Sorry, couldn\'t read that image. Try a clearer, well-lit photo of the bill.')
+    } finally {
+      setScanning(false)
+      if (fileRef.current) fileRef.current.value = ''
+    }
+  }
 
   const save = () => {
     if (!form.name.trim() || form.amount <= 0) return
@@ -49,8 +79,24 @@ export default function Bills() {
     <div className="view stack" style={{ gap: 14 }}>
       <div className="header">
         <div><div className="sub">Never miss a due date</div><h1>Bills</h1></div>
-        <button className="btn icon primary" onClick={openAdd}><Plus size={20} /></button>
+        <div className="row" style={{ gap: 8 }}>
+          <button className="btn icon" onClick={() => fileRef.current?.click()} title="Scan a bill"><ScanLine size={20} /></button>
+          <button className="btn icon primary" onClick={openAdd}><Plus size={20} /></button>
+        </div>
       </div>
+      <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={e => onPickFiles(e.target.files)} />
+
+      {/* Scan bill CTA */}
+      <button className="card tap row" style={{ gap: 13, borderColor: 'rgba(0,224,198,0.28)', background: 'radial-gradient(120% 140% at 100% 0%, rgba(0,224,198,0.16), transparent 60%), var(--surface)' }}
+        onClick={() => fileRef.current?.click()}>
+        <div className="lico" style={{ background: 'rgba(0,224,198,0.16)' }}><ScanLine size={20} style={{ color: 'var(--accent-2)' }} /></div>
+        <div style={{ flex: 1, textAlign: 'left' }}>
+          <div className="b small">Scan a bill <Sparkles size={12} style={{ color: 'var(--accent-2)', verticalAlign: -1 }} /></div>
+          <div className="tiny faint">Snap a photo — it reads the amount, due date & sets it up</div>
+        </div>
+      </button>
+
+      {scanErr && <div className="card" style={{ borderColor: 'rgba(251,106,106,0.3)', background: 'rgba(251,106,106,0.08)' }}><div className="small" style={{ color: 'var(--bad)' }}>{scanErr}</div></div>}
 
       {/* Funding calculator */}
       <div className="card hero">
@@ -101,9 +147,32 @@ export default function Bills() {
         })}
       </div>}
 
+      {/* Scanning overlay */}
+      {scanning && (
+        <div className="scrim" style={{ alignItems: 'center', zIndex: 70 }}>
+          <div className="card" style={{ width: 280, textAlign: 'center', padding: 26 }}>
+            <Loader2 size={34} className="spin" style={{ color: 'var(--accent-2)', margin: '0 auto 14px', display: 'block' }} />
+            <div className="b">Reading your bill…</div>
+            <div className="tiny muted" style={{ margin: '6px 0 14px' }}>Extracting amount, due date & details — all on your device.</div>
+            <div className="bar"><span style={{ width: `${Math.max(6, Math.round(scanPct * 100))}%` }} /></div>
+            <div className="tiny faint" style={{ marginTop: 8 }}>{Math.round(scanPct * 100)}%</div>
+          </div>
+        </div>
+      )}
+
       {/* Add/Edit sheet */}
-      <Sheet open={open} onClose={() => setOpen(false)} title={editing ? 'Edit Bill' : 'Add Bill'}>
+      <Sheet open={open} onClose={() => setOpen(false)} title={editing ? 'Edit Bill' : scanned ? 'Confirm scanned bill' : 'Add Bill'}>
         <div className="stack">
+          {scanned && (
+            <div className="card" style={{ padding: 13, borderColor: 'rgba(0,224,198,0.3)', background: 'rgba(0,224,198,0.07)' }}>
+              <div className="row" style={{ gap: 8 }}><Sparkles size={15} style={{ color: 'var(--accent-2)' }} />
+                <span className="small b">Auto-filled from your bill</span></div>
+              <div className="tiny faint" style={{ marginTop: 5 }}>
+                Found: {[scanned.found.name && 'name', scanned.found.amount && 'amount', scanned.found.date && 'due date'].filter(Boolean).join(', ') || 'partial info'}
+                {scanned.account ? ` · acct ${scanned.account}` : ''}. Review and tap save.
+              </div>
+            </div>
+          )}
           <Field label="Name">
             <input value={form.name} placeholder="e.g. Rent, Netflix" onChange={e => setForm({ ...form, name: e.target.value })} />
           </Field>

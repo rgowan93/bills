@@ -188,3 +188,5 @@ a { color: var(--accent-2); }
 .disclaimer { font-size: 11px; color: var(--faint); line-height: 1.5; }
 .badge-grade { font-size: 32px; font-weight: 850; background: linear-gradient(135deg, var(--good), var(--accent-2)); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .kpi { font-size: 22px; font-weight: 800; letter-spacing: -0.02em; }
+.spin { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
