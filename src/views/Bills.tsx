@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react'
-import { Plus, Check, Trash2, Bell, BellOff, Repeat, CalendarClock, Zap, ScanLine, Sparkles, Loader2 } from 'lucide-react'
+import { Plus, Check, Trash2, Bell, BellOff, Repeat, CalendarClock, Zap, ScanLine, Sparkles, Loader2, Layers } from 'lucide-react'
 import { useStore } from '../store/store'
 import {
   upcomingBills, money, fmtDate, fundingNeeded, monthlyBillTotal, setAsidePerPaycheck, monthlyEquivalent
@@ -36,6 +36,8 @@ export default function Bills() {
   const [scanPct, setScanPct] = useState(0)
   const [scanErr, setScanErr] = useState('')
   const [scanned, setScanned] = useState<ParsedBill | null>(null)
+  type MultiRow = { include: boolean; name: string; amount: number; nextDue: string; category: BillCategory }
+  const [multi, setMulti] = useState<MultiRow[] | null>(null)
 
   const up = useMemo(() => upcomingBills(s.bills, 365), [s.bills])
   const buffer = fundingNeeded(s.bills, horizon)
@@ -48,18 +50,27 @@ export default function Bills() {
     if (!files || !files.length) return
     setScanErr(''); setScanPct(0); setScanning(true)
     try {
-      const result = await scanBill(Array.from(files), p => setScanPct(p))
-      const b = blank()
-      const merged = {
-        ...b,
-        name: result.name || b.name,
-        amount: result.amount ?? b.amount,
-        category: result.category || b.category,
-        recurrence: result.recurrence || b.recurrence,
-        nextDue: result.nextDue || b.nextDue,
-        account: result.account,
+      const results = await scanBill(Array.from(files), p => setScanPct(p))
+      if (results.length > 1) {
+        setMulti(results.map(r => ({
+          include: true, name: r.name || '', amount: r.amount ?? 0,
+          nextDue: r.nextDue || blank().nextDue, category: r.category || 'debt'
+        })))
+      } else {
+        const result = results[0]
+        const b = blank()
+        setEditing(null)
+        setForm({
+          ...b,
+          name: result.name || b.name,
+          amount: result.amount ?? b.amount,
+          category: result.category || b.category,
+          recurrence: result.recurrence || b.recurrence,
+          nextDue: result.nextDue || b.nextDue,
+          account: result.account,
+        })
+        setScanned(result); setOpen(true)
       }
-      setEditing(null); setForm(merged); setScanned(result); setOpen(true)
     } catch (e: any) {
       setScanErr(e?.message?.includes('etwork') ? 'Could not load the scanner. Connect to the internet once so it can download (then it works offline).' : 'Sorry, couldn\'t read that image. Try a clearer, well-lit photo of the bill.')
     } finally {
@@ -218,6 +229,66 @@ export default function Bills() {
           <button className="btn primary full" onClick={save}>{editing ? 'Save changes' : 'Add bill'}</button>
           {editing && <button className="btn danger full" onClick={() => { s.removeBill(editing.id); setOpen(false) }}><Trash2 size={16} /> Delete</button>}
         </div>
+      </Sheet>
+
+      {/* Multi-bill review sheet */}
+      <Sheet open={!!multi} onClose={() => setMulti(null)} title={`${multi?.length ?? 0} payments found`}>
+        {multi && (() => {
+          const chosen = multi.filter(m => m.include)
+          const total = chosen.reduce((a, m) => a + (m.amount || 0), 0)
+          const set = (i: number, patch: Partial<MultiRow>) => setMulti(multi.map((m, j) => j === i ? { ...m, ...patch } : m))
+          return (
+            <div className="stack">
+              <div className="card" style={{ padding: 12, borderColor: 'rgba(0,224,198,0.3)', background: 'rgba(0,224,198,0.07)' }}>
+                <div className="row" style={{ gap: 8 }}><Layers size={15} style={{ color: 'var(--accent-2)' }} />
+                  <span className="small b">Multiple payments detected</span></div>
+                <div className="tiny faint" style={{ marginTop: 5 }}>Pick the ones to add — tap any to edit. Each is added as a one-time scheduled bill.</div>
+              </div>
+              <div className="between">
+                <button className="btn sm ghost" onClick={() => setMulti(multi.map(m => ({ ...m, include: true })))}>Select all</button>
+                <button className="btn sm ghost" onClick={() => setMulti(multi.map(m => ({ ...m, include: false })))}>Clear</button>
+              </div>
+              <div className="stack" style={{ gap: 10 }}>
+                {multi.map((m, i) => (
+                  <div key={i} className="card" style={{ padding: 12, opacity: m.include ? 1 : 0.5, borderColor: m.include ? 'var(--border-strong)' : 'var(--border)' }}>
+                    <div className="row" style={{ gap: 10, alignItems: 'flex-start' }}>
+                      <button onClick={() => set(i, { include: !m.include })} aria-label="toggle"
+                        style={{ width: 26, height: 26, borderRadius: 8, flexShrink: 0, marginTop: 2, border: '1.5px solid var(--border-strong)', background: m.include ? 'var(--accent-2)' : 'transparent', color: '#04201c', display: 'grid', placeItems: 'center', cursor: 'pointer' }}>
+                        {m.include && <Check size={16} strokeWidth={3} />}
+                      </button>
+                      <div style={{ flex: 1, minWidth: 0 }} className="stack" >
+                        <input value={m.name} onChange={e => set(i, { name: e.target.value })} placeholder="Name" style={{ padding: '9px 11px', fontSize: 15, fontWeight: 600 }} />
+                        <div className="grid grid-2">
+                          <input type="number" inputMode="decimal" value={m.amount || ''} onChange={e => set(i, { amount: Number(e.target.value) })} placeholder="Amount" style={{ padding: '9px 11px' }} />
+                          <input type="date" value={m.nextDue.slice(0, 10)} onChange={e => set(i, { nextDue: new Date(e.target.value).toISOString() })} style={{ padding: '9px 11px' }} />
+                        </div>
+                        <div className="scroll-x">
+                          {cats.map(c => (
+                            <button key={c} className={`chip ${m.category === c ? 'info' : ''}`} style={{ flexShrink: 0 }} onClick={() => set(i, { category: c })}>{catMeta[c].emoji} {catMeta[c].label}</button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="between" style={{ padding: '4px 2px' }}>
+                <span className="small muted">{chosen.length} selected</span>
+                <span className="b">{money(total)}</span>
+              </div>
+              <button className="btn primary full" disabled={!chosen.length}
+                onClick={() => {
+                  chosen.forEach(m => {
+                    if (!m.name.trim() || m.amount <= 0) return
+                    s.addBill({ name: m.name.trim(), amount: m.amount, category: m.category, dueDay: 1, nextDue: m.nextDue, recurrence: 'once', autopay: false, notify: true, notifyDaysBefore: 3 })
+                  })
+                  setMulti(null)
+                }}>
+                Add {chosen.length} bill{chosen.length === 1 ? '' : 's'}
+              </button>
+            </div>
+          )
+        })()}
       </Sheet>
     </div>
   )

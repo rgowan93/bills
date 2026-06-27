@@ -1,4 +1,4 @@
-import { parse as parseDate, isValid } from 'date-fns'
+import { parse as parseDate, isValid, format, addDays } from 'date-fns'
 import type { BillCategory, Recurrence } from './types'
 
 export interface ParsedBill {
@@ -13,8 +13,12 @@ export interface ParsedBill {
   found: { name: boolean; amount: boolean; date: boolean }
 }
 
-/** Run OCR on one or more images (pages of a bill) and parse the combined text. */
-export async function scanBill(files: File[], onProgress?: (p: number) => void): Promise<ParsedBill> {
+/**
+ * Run OCR on one or more images and return one or more bills.
+ * A single statement yields one bill; a payment-schedule / BNPL list (e.g.
+ * Klarna, Affirm) yields one bill per row.
+ */
+export async function scanBill(files: File[], onProgress?: (p: number) => void): Promise<ParsedBill[]> {
   const Tesseract = (await import('tesseract.js')).default
   let combined = ''
   let confSum = 0
@@ -29,9 +33,18 @@ export async function scanBill(files: File[], onProgress?: (p: number) => void):
     combined += '\n' + data.text
     confSum += (data.confidence ?? 0)
   }
-  const parsed = parseBillText(combined)
-  parsed.confidence = files.length ? confSum / files.length / 100 : 0
-  return parsed
+  const bills = parseBills(combined)
+  const conf = files.length ? confSum / files.length / 100 : 0
+  bills.forEach(b => { b.confidence = conf })
+  return bills
+}
+
+/** Decide single-bill vs multi-payment list and parse accordingly. */
+export function parseBills(text: string): ParsedBill[] {
+  const fixed = mergeStackedDates(text)
+  const list = extractPaymentList(fixed)
+  if (list.length >= 2) return list
+  return [parseBillText(text)]
 }
 
 /* ---------------- biller / category dictionaries ---------------- */
@@ -179,4 +192,116 @@ export function parseBillText(text: string): ParsedBill {
 
 function startOfDayISO(d: Date): string {
   const x = new Date(d); x.setHours(0, 0, 0, 0); return x.toISOString()
+}
+
+/* ================= multi-payment (BNPL / payment schedule) ================= */
+
+interface Store { keys: string[]; name: string }
+const STORES: Store[] = [
+  { keys: ['walmart with onepay', 'onepay'], name: 'Walmart OnePay' },
+  { keys: ['ebay'], name: 'eBay' },
+  { keys: ['walmart'], name: 'Walmart' },
+  { keys: ['amazon'], name: 'Amazon' },
+  { keys: ['target'], name: 'Target' },
+  { keys: ['best buy', 'bestbuy'], name: 'Best Buy' },
+  { keys: ['home depot'], name: 'Home Depot' },
+  { keys: ['lowes', "lowe's"], name: "Lowe's" },
+  { keys: ['wayfair'], name: 'Wayfair' },
+  { keys: ['apple.com', 'apple store'], name: 'Apple' },
+  { keys: ['nike'], name: 'Nike' },
+  { keys: ['shein'], name: 'SHEIN' },
+  { keys: ['temu'], name: 'Temu' },
+  { keys: ['paypal'], name: 'PayPal' },
+  { keys: ['klarna'], name: 'Klarna' },
+  { keys: ['affirm'], name: 'Affirm' },
+  { keys: ['afterpay'], name: 'Afterpay' },
+  { keys: ['sezzle'], name: 'Sezzle' },
+  { keys: ['zip pay', 'quadpay'], name: 'Zip' }
+]
+
+function matchStore(line: string): Store | null {
+  const low = line.toLowerCase()
+  for (const s of STORES) if (s.keys.some(k => low.includes(k))) return s
+  return null
+}
+
+/** Join a month abbreviation stacked above a day number ("Jul\n11" -> "Jul 11"). */
+function mergeStackedDates(text: string): string {
+  return text.replace(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s*\r?\n\s*(\d{1,2})\b/gi, '$1 $2')
+}
+
+function parseLooseDate(raw: string): Date | null {
+  const withYear = parseDateString(raw)
+  if (withYear) return withYear
+  const m = raw.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})\b/i)
+  if (m) {
+    const now = new Date()
+    let d = parseDate(`${m[1].slice(0, 3)} ${m[2]} ${now.getFullYear()}`, 'MMM d yyyy', now)
+    if (!isValid(d)) return null
+    if (d.getTime() < now.getTime() - 60 * 864e5) d = parseDate(`${m[1].slice(0, 3)} ${m[2]} ${now.getFullYear() + 1}`, 'MMM d yyyy', now)
+    return isValid(d) ? d : null
+  }
+  return null
+}
+
+const SUMMARY_LINE = /(to pay|total|balance|subtotal|selected|amount enclosed)/i
+// month+day, year optional (BNPL rows usually omit the year)
+const LOOSE_DATE_RX = /((?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(?:,?\s+\d{2,4})?)|(\b\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?\b)/i
+
+/** Detect a repeating list of payments and return one parsed bill per row. */
+function extractPaymentList(text: string): ParsedBill[] {
+  const lines = text.split(/\r?\n/).map(l => l.trim())
+  const low = text.toLowerCase()
+  const isBNPL = /(klarna|affirm|afterpay|sezzle|zip pay|quadpay|pay in 4|installment|autopay in)/.test(low)
+
+  interface Row { name: string; amount: number; date: Date | null }
+  const rows: Row[] = []
+  const seen = new Set<string>()
+
+  for (let i = 0; i < lines.length; i++) {
+    const store = matchStore(lines[i])
+    if (!store) continue
+    // amount on same line, else immediately adjacent
+    let amount: number | null = null
+    for (const d of [0, 1, -1]) {
+      const li = i + d
+      if (li < 0 || li >= lines.length) continue
+      if (SUMMARY_LINE.test(lines[li])) continue
+      const m = lines[li].replace(/\([^)]*\)/g, ' ').match(/\$\s?\d{1,3}(?:,\d{3})*\.\d{2}/)
+      if (m) { amount = toNumber(m[0]); break }
+    }
+    if (amount == null || amount <= 0) continue
+    const key = store.name + ':' + amount
+    if (seen.has(key)) continue
+    seen.add(key)
+    // nearest date within a small window
+    let date: Date | null = null
+    for (let d = 0; d <= 2 && !date; d++) {
+      for (const li of [i - d, i + d]) {
+        if (li < 0 || li >= lines.length) continue
+        if (/autopay in|in \d+ days/i.test(lines[li])) continue  // ignore "Autopay in 15 days"
+        const m = lines[li].match(LOOSE_DATE_RX)
+        if (m) { const dt = parseLooseDate(m[0]); if (dt) { date = dt; break } }
+      }
+    }
+    rows.push({ name: store.name, amount, date })
+  }
+
+  const distinctAmts = new Set(rows.map(r => Math.round(r.amount * 100)))
+  const distinctMerch = new Set(rows.map(r => r.name))
+  const autopayCues = (low.match(/autopay|installment|pay in 4/g) || []).length
+
+  if (rows.length >= 2 && distinctAmts.size >= 2 && (isBNPL || distinctMerch.size >= 2 || autopayCues >= 2)) {
+    return rows.map(r => ({
+      name: r.date ? `${r.name} · ${format(r.date, 'MMM d')}` : r.name,
+      amount: Math.round(r.amount * 100) / 100,
+      category: 'debt' as BillCategory,
+      recurrence: 'once' as Recurrence,
+      nextDue: r.date ? startOfDayISO(r.date) : startOfDayISO(addDays(new Date(), 14)),
+      confidence: 0,
+      rawText: text,
+      found: { name: true, amount: true, date: !!r.date }
+    }))
+  }
+  return []
 }
